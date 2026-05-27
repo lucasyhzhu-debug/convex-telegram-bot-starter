@@ -1,0 +1,4 @@
+# .husky/pre-commit.sample
+# Rename to .husky/pre-commit and `chmod +x` to enable.
+node scripts/verify-no-secrets.mjs --staged || exit 1
+npm run type-check || exit 1

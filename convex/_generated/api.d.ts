@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as crons from "../crons.js";
+import type * as http from "../http.js";
 import type * as lib_chunking from "../lib/chunking.js";
 import type * as lib_constantTimeEqual from "../lib/constantTimeEqual.js";
 import type * as lib_dateAnchors from "../lib/dateAnchors.js";
@@ -22,6 +24,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  crons: typeof crons;
+  http: typeof http;
   "lib/chunking": typeof lib_chunking;
   "lib/constantTimeEqual": typeof lib_constantTimeEqual;
   "lib/dateAnchors": typeof lib_dateAnchors;

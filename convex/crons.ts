@@ -2,6 +2,11 @@
 import { cronJobs } from "convex/server";
 // import { internal } from "./_generated/api";  // uncomment alongside ANY cron entry below
 
+// Note on `reason: "morning" as const`: the cron args must match the action's
+// arg validator union (`v.literal("morning") | v.literal("midday") | ...`).
+// Without `as const`, TypeScript widens "morning" to `string`, which doesn't
+// satisfy the union and produces a confusing assignability error.
+
 const crons = cronJobs();
 
 // Hello-world daily — UNCOMMENT to enable. Posts at 12:00 UTC every day.

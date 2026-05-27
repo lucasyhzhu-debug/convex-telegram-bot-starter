@@ -27,6 +27,11 @@ export const getOrdersForPackList = internalQuery({
     // Convex stores absent optional fields as `undefined`, and undefined sorts
     // BEFORE all numeric values in an index — so `.lte("dueDate", X)` includes
     // unset rows. Filter them out explicitly after collecting.
+    //
+    // We iterate statuses one at a time because `by_status_due_date` is a
+    // range index: the equality prefix (`status`) must be a single value when
+    // also bounding the range (`dueDate`). Two scans (one per active status)
+    // is the idiomatic Convex pattern here.
     const collected: Doc<"orders">[] = [];
     for (const status of ACTIVE_STATUSES) {
       const slice = await ctx.db

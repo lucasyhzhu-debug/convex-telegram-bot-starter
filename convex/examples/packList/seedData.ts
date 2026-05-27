@@ -1,5 +1,6 @@
 // convex/examples/packList/seedData.ts
 import { internalMutation } from "../../_generated/server";
+import { noonLocalTodayMs } from "../../lib/dateAnchors";
 
 const DEMO_ORDER_NUMBERS = ["0527-001", "0527-002", "0529-001"] as const;
 
@@ -17,6 +18,8 @@ export const resetDemoData = internalMutation({
   args: {},
   handler: async (ctx) => {
     // Targeted wipe — only the 3 demo orders (and their items).
+    // Full-table scan is fine for 3 demo rows. For production-scale wipes,
+    // add a `by_orderNumber` index to `orders` and use `withIndex` instead.
     for (const orderNumber of DEMO_ORDER_NUMBERS) {
       const existing = await ctx.db
         .query("orders")
@@ -32,16 +35,21 @@ export const resetDemoData = internalMutation({
       }
     }
 
-    const today = Date.now();
-    const inEightHours = today + 8 * 3600_000;
-    const inSixteenHours = today + 16 * 3600_000;
-    const inTwoDays = today + 2 * 86400_000;
+    // Anchor demo due dates to LOCAL noon (in PACK_LIST_TIMEZONE) so the
+    // README's "expect 2 orders" promise holds regardless of when the seed
+    // runs — `Date.now()`-relative offsets would silently push Order A past
+    // end-of-today if seeded in the late afternoon.
+    const timeZone = process.env.PACK_LIST_TIMEZONE ?? "UTC";
+    const noonToday = noonLocalTodayMs(timeZone);
+    const localFourPm = noonToday + 4 * 3600_000;   // 16:00 local — inside today's window
+    const localSixPm = noonToday + 6 * 3600_000;    // 18:00 local — inside today's window
+    const dayAfterTomorrow = noonToday + 36 * 3600_000; // ~midnight day-after-tomorrow local — outside today's window
 
     const a = await ctx.db.insert("orders", {
       orderNumber: "0527-001",
       customerName: "Customer A",
       status: "pending",
-      dueDate: inEightHours,
+      dueDate: localFourPm,
       deliveryType: "delivery",
       deliveryAddress: "123 Maple Street, Suburb",
       expedited: true,
@@ -53,7 +61,7 @@ export const resetDemoData = internalMutation({
       orderNumber: "0527-002",
       customerName: "Customer B",
       status: "in_progress",
-      dueDate: inSixteenHours,
+      dueDate: localSixPm,
       deliveryType: "pickup",
       notes: "Ring buzzer 4B",
     });
@@ -64,7 +72,7 @@ export const resetDemoData = internalMutation({
       orderNumber: "0529-001",
       customerName: "Customer C (future)",
       status: "pending",
-      dueDate: inTwoDays,
+      dueDate: dayAfterTomorrow,
       deliveryType: "delivery",
       deliveryAddress: "999 Future Lane",
     });

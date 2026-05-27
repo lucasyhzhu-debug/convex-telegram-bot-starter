@@ -71,7 +71,12 @@ export async function sendChunksWithBreadcrumb(
         await send(
           `<i>⚠️ Pack list send failed after ${sentCount}/${chunks.length} chunks. Check Convex logs.</i>`,
         );
-      } catch { /* best-effort */ }
+      } catch (breadcrumbErr) {
+        // Breadcrumb is best-effort, but silently swallowing the failure creates
+        // a debug black hole — log it so the operator can see both the original
+        // failure AND that the user-visible breadcrumb didn't make it through.
+        console.warn("[pack-list] breadcrumb send also failed", breadcrumbErr);
+      }
     }
     throw err;
   }

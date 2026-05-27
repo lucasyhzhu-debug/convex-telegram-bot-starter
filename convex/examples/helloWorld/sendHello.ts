@@ -4,7 +4,7 @@ import type { Scheduler } from "convex/server";
 import { internalAction } from "../../_generated/server";
 import { internal } from "../../_generated/api";
 import { sendTelegramHtml } from "../../lib/telegramHtml";
-import { formatHello, type HelloReason } from "./helloFormat";
+import { formatHello } from "./helloFormat";
 import type { CommandRegistration } from "../../telegram/commands";
 
 export const sendHello = internalAction({
@@ -16,7 +16,12 @@ export const sendHello = internalAction({
     if (!token || !chatId) {
       throw new Error("Telegram env vars missing (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)");
     }
-    const chunks = formatHello({ reason: args.reason as HelloReason, generatedAt: Date.now() });
+    // `args.reason` is already typed `"cron" | "command"` (= `HelloReason`)
+    // by Convex's arg validator — no cast needed.
+    const chunks = formatHello({ reason: args.reason, generatedAt: Date.now() });
+    // Single chunk always — no partial-send breadcrumb needed here.
+    // See `convex/examples/packList/sendPackList.ts` for the multi-chunk
+    // pattern with `sendChunksWithBreadcrumb`.
     for (const chunk of chunks) {
       await sendTelegramHtml(token, chatId, chunk);
     }

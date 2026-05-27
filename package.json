@@ -1,0 +1,28 @@
+{
+  "name": "convex-telegram-bot-starter",
+  "version": "0.1.0",
+  "private": false,
+  "license": "MIT",
+  "description": "Convex-backed Telegram bot starter: daily message + slash command, with playbook + guardrails.",
+  "repository": "https://github.com/lucasyhzhu-debug/convex-telegram-bot-starter",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "dev": "npx convex dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "type-check": "tsc --noEmit",
+    "verify-secrets": "node scripts/verify-no-secrets.mjs --full",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "convex": "^1.16.0"
+  },
+  "devDependencies": {
+    "@edge-runtime/vm": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "convex-test": "^0.0.34",
+    "husky": "^9.1.7",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  }
+}

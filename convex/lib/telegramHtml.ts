@@ -1,5 +1,6 @@
 // HTML escape + sendMessage helper for Telegram's HTML parse mode.
-// pattern: see ./constantTimeEqual.ts
+// Used alongside constantTimeEqual.ts in the webhook path: constantTimeEqual
+// guards the inbound secret, sendTelegramHtml emits the outbound reply.
 
 /**
  * Escape &, <, > for Telegram HTML parse_mode. Quotes and apostrophes are

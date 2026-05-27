@@ -41,8 +41,14 @@ describe("chunkItems", () => {
   });
 
   it("never splits a single item across two chunks", () => {
-    const items = Array.from({ length: 30 }, (_, i) => `<b>ITEM-${i}</b>`);
-    const out = chunkItems(HEADER, items, { maxChunkLen: 500 });
+    // Use items large enough relative to maxChunkLen to FORCE multi-chunk output.
+    // Without the precondition check below, a too-generous budget would make
+    // this test pass trivially on the single-chunk path (~4 items × 53 chars +
+    // header + separators fits in 250 → forces splits; ~30 items × ~14 chars
+    // would NOT). The precondition assertion is load-bearing.
+    const items = Array.from({ length: 30 }, (_, i) => `<b>ITEM-${i}</b>${"x".repeat(40)}`);
+    const out = chunkItems(HEADER, items, { maxChunkLen: 250 });
+    expect(out.length).toBeGreaterThan(1);
     const joined = out.join("\n");
     for (let i = 0; i < 30; i++) {
       const marker = `<b>ITEM-${i}</b>`;

@@ -7,7 +7,16 @@ export interface ChunkerOptions {
   maxItemLen?: number;
   /** Marker appended to a truncated item. Default `"\n  …[truncated — check source]"`. */
   truncateMarker?: string;
-  /** Builds the header line for chunks 2..N. Default omits a continuation header. */
+  /**
+   * Builds the header line for chunks 2..N. Default omits a continuation header.
+   *
+   * PRECONDITION: when set, the effective per-item budget shrinks by
+   * `contHeader.length + 2`. The chunk-length invariant only holds if
+   * `maxItemLen + contHeader.length + 2 <= maxChunkLen`. With defaults
+   * (maxChunkLen=4000, maxItemLen=3800), continuation headers up to ~200 chars
+   * are safe. A header much longer than that combined with a worst-case
+   * truncated item can produce a chunk above `maxChunkLen`.
+   */
   continuationHeader?: (chunkIndex: number) => string;
 }
 

@@ -12,6 +12,8 @@ import type * as lib_chunking from "../lib/chunking.js";
 import type * as lib_constantTimeEqual from "../lib/constantTimeEqual.js";
 import type * as lib_dateAnchors from "../lib/dateAnchors.js";
 import type * as lib_telegramHtml from "../lib/telegramHtml.js";
+import type * as telegram_commands from "../telegram/commands.js";
+import type * as telegram_webhook from "../telegram/webhook.js";
 
 import type {
   ApiFromModules,
@@ -24,6 +26,8 @@ declare const fullApi: ApiFromModules<{
   "lib/constantTimeEqual": typeof lib_constantTimeEqual;
   "lib/dateAnchors": typeof lib_dateAnchors;
   "lib/telegramHtml": typeof lib_telegramHtml;
+  "telegram/commands": typeof telegram_commands;
+  "telegram/webhook": typeof telegram_webhook;
 }>;
 
 /**

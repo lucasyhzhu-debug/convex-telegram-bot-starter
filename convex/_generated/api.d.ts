@@ -13,6 +13,7 @@ import type * as examples_helloWorld_helloFormat from "../examples/helloWorld/he
 import type * as examples_helloWorld_sendHello from "../examples/helloWorld/sendHello.js";
 import type * as examples_packList_packListFormat from "../examples/packList/packListFormat.js";
 import type * as examples_packList_packListQuery from "../examples/packList/packListQuery.js";
+import type * as examples_packList_seedData from "../examples/packList/seedData.js";
 import type * as examples_packList_sendPackList from "../examples/packList/sendPackList.js";
 import type * as http from "../http.js";
 import type * as lib_chunking from "../lib/chunking.js";
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   "examples/helloWorld/sendHello": typeof examples_helloWorld_sendHello;
   "examples/packList/packListFormat": typeof examples_packList_packListFormat;
   "examples/packList/packListQuery": typeof examples_packList_packListQuery;
+  "examples/packList/seedData": typeof examples_packList_seedData;
   "examples/packList/sendPackList": typeof examples_packList_sendPackList;
   http: typeof http;
   "lib/chunking": typeof lib_chunking;

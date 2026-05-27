@@ -8,7 +8,10 @@ describe("findSecrets", () => {
   });
 
   it("flags a Telegram bot token shape", () => {
-    const hits = findSecrets("token: 8390266374:AAEsomethingverylongstringforatokenXYZ");
+    // Synthetic shape — leading 10 digits + 30+ alphanumeric after `:` is what
+    // Telegram tokens look like. Any real bot IDs from the source project were
+    // scrubbed at the Phase-8 audit; only synthetic shapes belong in fixtures.
+    const hits = findSecrets("token: 1234567890:AAExxxSyntheticTestTokenShapeForExamplesOnly");
     expect(hits.some((h) => h.kind === "telegram-bot-token")).toBe(true);
   });
 
@@ -18,7 +21,8 @@ describe("findSecrets", () => {
   });
 
   it("flags a Convex deployment URL", () => {
-    const hits = findSecrets("convex url: exciting-fennec-671.convex.cloud");
+    // Synthetic deployment name — word-word-NNN is the Convex convention.
+    const hits = findSecrets("convex url: example-bot-123.convex.cloud");
     expect(hits.some((h) => h.kind === "convex-deployment")).toBe(true);
   });
 

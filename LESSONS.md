@@ -78,21 +78,21 @@ PowerShell parses `[` as part of its glob/range syntax before curl ever sees the
 
 **The trap:**
 ```bash
-npx convex env set TELEGRAM_CHAT_ID -1001234567890
-# error: unknown option '-1001234567890'
+npx convex env set TELEGRAM_CHAT_ID <your-chat-id>
+# error: unknown option '<your-chat-id>'
 ```
 
-The CLI's positional-argument parser sees `-1001234567890` as a flag. Confusingly, this only bites with chat IDs (which are always negative for groups/supergroups).
+The CLI's positional-argument parser sees negative chat IDs (like `-100<digits>` for supergroups) as flags. Confusingly, this only bites with chat IDs (which are always negative for groups/supergroups).
 
 **Fix:** Use the `key=value` form:
 ```bash
-npx convex env set TELEGRAM_CHAT_ID=-1001234567890
+npx convex env set TELEGRAM_CHAT_ID=<your-chat-id>
 ```
 
 ---
 
 ## 9. Group → supergroup migration changes chat_id shape
 
-**The trap:** Your bot works fine in a regular group with chat_id `-123456789`. The group hits 200+ members and Telegram migrates it to a supergroup. The chat_id silently becomes `-1001234567890`. Your bot, configured with the old ID, stops posting.
+**The trap:** Your bot works fine in a regular group with chat_id `-123456789`. The group hits 200+ members and Telegram migrates it to a supergroup. The chat_id silently becomes `-100<digits>` (the supergroup format). Your bot, configured with the old ID, stops posting.
 
 **Fix:** Watch for it. See RUNBOOK #11 for the recovery sequence. It's expected somewhere in the lifecycle of every long-running bot whose chat grows past the regular-group cap.

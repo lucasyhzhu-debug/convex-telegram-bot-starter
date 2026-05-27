@@ -34,7 +34,7 @@ const SKIP_FILES = [
   /(^|\/)convex\/_generated\//,
   /(^|\/)node_modules\//,
   /\.map$/,
-  /(^|\/)scripts\/__tests__\/fixtures\//, // test fixtures intentionally contain patterns
+  /(^|\/)scripts\/__tests__\//, // test files intentionally contain pattern fixtures
 ];
 
 // Files explicitly allowed to contain placeholders that LOOK like patterns

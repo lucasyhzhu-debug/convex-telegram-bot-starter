@@ -12,7 +12,7 @@ In Telegram, open a chat with `@BotFather`, send `/newbot`.
 
 - Choose a display name (e.g. `My Pack List Bot`)
 - Choose a unique username ending in `bot` (e.g. `my_packlist_bot`)
-- BotFather replies with a token like `8390266374:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`. **Save it.** Don't share it.
+- BotFather replies with a token like `<botid>:<token-string>` (looks like `1234567890:AAExxxxxxxx…`). **Save it.** Don't share it.
 
 Also note: BotFather sets **privacy mode ON by default** for new bots. Privacy mode means your bot only sees messages that mention it (`@your_bot`) or are commands registered via `/setcommands` (see step 7).
 
@@ -54,7 +54,7 @@ curl "https://api.telegram.org/bot<your-bot-token>/getUpdates"
 Look in the response JSON for `"chat": {"id": ...}`. Examples:
 - Private chat with the bot: `123456789` (positive)
 - Group: `-987654321` (negative)
-- Supergroup: `-1001234567890` (starts with `-100`)
+- Supergroup: `-100<digits>` (starts with `-100`)
 
 Then:
 ```bash

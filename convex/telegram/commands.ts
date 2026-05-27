@@ -25,6 +25,12 @@ export interface CommandMatch {
  * always indicate user typos, not parameter intent — and v1 commands take no
  * parameters). If you want lenient matching in v2, swap the regex to a
  * head-only match (`^\\/${name}(@[A-Za-z0-9_]+)?\\b`).
+ *
+ * MATCHING IS CASE-SENSITIVE. `/PING` will NOT match a registration for
+ * "ping" — this follows Telegram's convention (the in-app command list always
+ * sends lowercase) and keeps the matcher predictable. If you want case-
+ * insensitive matching, lowercase `text` before passing in OR add the `i`
+ * regex flag at construction time.
  */
 export function buildCommandMatcher(
   registrations: CommandRegistration[],

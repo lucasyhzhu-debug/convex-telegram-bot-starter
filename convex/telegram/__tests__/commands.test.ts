@@ -36,4 +36,16 @@ describe("buildCommandMatcher", () => {
     expect(m?.command).toBe(a);
     expect(m?.command).not.toBe(b);
   });
+
+  it("matching is case-sensitive — /PING does NOT match the 'ping' registration", () => {
+    // Documents the intentional Telegram-convention behavior. The in-app
+    // command list always sends lowercase, so case-sensitivity keeps the
+    // matcher predictable. Manual typing of /PING returns null — callers
+    // can lowercase `text` upstream if they want lenient matching.
+    const ping = reg("ping");
+    const matcher = buildCommandMatcher([ping]);
+    expect(matcher("/ping")?.command.name).toBe("ping");
+    expect(matcher("/PING")).toBeNull();
+    expect(matcher("/Ping")).toBeNull();
+  });
 });

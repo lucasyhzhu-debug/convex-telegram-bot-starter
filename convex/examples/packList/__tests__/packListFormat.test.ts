@@ -137,8 +137,8 @@ describe("formatPackList", () => {
       counts: { total: 2, delivery: 2, pickup: 0 },
       generatedAt: T, timeZone: "Asia/Jakarta",
     });
-    const idxRush = out[0].indexOf("B-RUSH");
-    const idxNormal = out[0].indexOf("A-NORMAL");
+    const idxRush = out[0]!.indexOf("B-RUSH");
+    const idxNormal = out[0]!.indexOf("A-NORMAL");
     expect(idxRush).toBeGreaterThan(-1);
     expect(idxNormal).toBeGreaterThan(-1);
     expect(idxRush).toBeLessThan(idxNormal);
@@ -152,8 +152,8 @@ describe("formatPackList", () => {
       counts: { total: 2, delivery: 2, pickup: 0 },
       generatedAt: T, timeZone: "Asia/Jakarta",
     });
-    const idxEarlier = out[0].indexOf("EARLIER");
-    const idxLater = out[0].indexOf("LATER");
+    const idxEarlier = out[0]!.indexOf("EARLIER");
+    const idxLater = out[0]!.indexOf("LATER");
     expect(idxEarlier).toBeLessThan(idxLater);
   });
 

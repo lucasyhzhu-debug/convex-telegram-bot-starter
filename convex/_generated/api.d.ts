@@ -11,6 +11,8 @@
 import type * as crons from "../crons.js";
 import type * as examples_helloWorld_helloFormat from "../examples/helloWorld/helloFormat.js";
 import type * as examples_helloWorld_sendHello from "../examples/helloWorld/sendHello.js";
+import type * as examples_packList_packListFormat from "../examples/packList/packListFormat.js";
+import type * as examples_packList_packListQuery from "../examples/packList/packListQuery.js";
 import type * as http from "../http.js";
 import type * as lib_chunking from "../lib/chunking.js";
 import type * as lib_constantTimeEqual from "../lib/constantTimeEqual.js";
@@ -29,6 +31,8 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   "examples/helloWorld/helloFormat": typeof examples_helloWorld_helloFormat;
   "examples/helloWorld/sendHello": typeof examples_helloWorld_sendHello;
+  "examples/packList/packListFormat": typeof examples_packList_packListFormat;
+  "examples/packList/packListQuery": typeof examples_packList_packListQuery;
   http: typeof http;
   "lib/chunking": typeof lib_chunking;
   "lib/constantTimeEqual": typeof lib_constantTimeEqual;

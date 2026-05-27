@@ -1,18 +1,19 @@
 // convex/http.ts
 //
-// Telegram webhook entry point. The empty registry below is the
-// minimum viable wiring — add commands by importing each example app's
-// `buildXxxCommands(scheduler)` and concatenating their registrations.
+// Telegram webhook entry point. Add commands by importing each example
+// app's `buildXxxCommands(scheduler)` and concatenating their registrations.
 //
-// See convex/examples/helloWorld/sendHello.ts and convex/examples/packList/sendPackList.ts
-// (added in later phases) for the registration pattern.
+// See convex/examples/helloWorld/sendHello.ts for the registration pattern.
 import { httpRouter } from "convex/server";
 import { buildHandleTelegramWebhook } from "./telegram/webhook";
+import { buildHelloWorldCommands } from "./examples/helloWorld/sendHello";
 
 const http = httpRouter();
 http.route({
   path: "/telegram-webhook",
   method: "POST",
-  handler: buildHandleTelegramWebhook(() => []),  // empty registry — extend in your example app
+  handler: buildHandleTelegramWebhook((scheduler) => [
+    ...buildHelloWorldCommands(scheduler),
+  ]),
 });
 export default http;

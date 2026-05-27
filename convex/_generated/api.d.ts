@@ -9,6 +9,8 @@
  */
 
 import type * as crons from "../crons.js";
+import type * as examples_helloWorld_helloFormat from "../examples/helloWorld/helloFormat.js";
+import type * as examples_helloWorld_sendHello from "../examples/helloWorld/sendHello.js";
 import type * as http from "../http.js";
 import type * as lib_chunking from "../lib/chunking.js";
 import type * as lib_constantTimeEqual from "../lib/constantTimeEqual.js";
@@ -25,6 +27,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   crons: typeof crons;
+  "examples/helloWorld/helloFormat": typeof examples_helloWorld_helloFormat;
+  "examples/helloWorld/sendHello": typeof examples_helloWorld_sendHello;
   http: typeof http;
   "lib/chunking": typeof lib_chunking;
   "lib/constantTimeEqual": typeof lib_constantTimeEqual;

@@ -21,6 +21,33 @@ Now my Telegram bot posts the pack list at 7am. I wake up, glance at my phone, a
 The unexpected win: my packing staff are in the same group. They see the same pack list at the same time I do. When the order count is high they're already mentally prepared before walking into the kitchen; when it's low they know the day is calmer. Nobody has to log into anything. Nobody has to ask anyone. **Accountability becomes ambient** — the information is just *there*, in the chat we were all going to be in anyway. The bot turned a daily friction into a shared morning ritual, and the cost was a few hours of plumbing.
 
 That's the bot this starter is extracted from. The `packList` example is the sanitized version of exactly what I wake up to. If you've been waiting for the right shape of tool to push your operational data into your team's existing communication patterns, this is it.
+
+## What's new in v2
+
+v1 posted to a **single** hand-configured group (`TELEGRAM_CHAT_ID`). v2 adds
+**self-registering multi-chat routing** — chats register themselves, you route
+any number of feeds to any number of groups, and you can re-point a feed from a
+UI with no redeploy.
+
+```
+/register@<bot>  →  assign a role in the admin UI  →  feeds route by role
+```
+
+- **Self-registration.** An operator adds the bot to a Telegram group and sends
+  `/register@<bot>`. The bot captures it in a `telegramChats` table and replies
+  with a link to the admin UI. No `curl …/getUpdates`, no env edits.
+- **Role indirection.** Send-actions call `getChatIdByRole({ role })` at send
+  time, so repointing a feed to a different group is a UI click — no code change.
+- **React admin app.** Manage chats, assign roles, test-send, archive/restore at
+  `/admin/telegram-chats`. Run it with `npm run dev:web` (Vite).
+- **Cron resilience.** A `*Resilient` wrapper retries transient Convex
+  capacity errors so a scheduled post isn't silently dropped.
+
+The v1 single-chat path still works unchanged (the registry falls back to
+`TELEGRAM_CHAT_ID` during migration). New here? Read
+**[docs/SELF-REGISTRATION.md](docs/SELF-REGISTRATION.md)** for the walkthrough and
+**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the model.
+
 ## What this is good for
 
 Telegram bots are the cheapest, lowest-friction way to put your back-end into a team's chat. No app to build, no per-seat license, no extra dashboard for ops to log into. The message just lands in the group everyone already has open all day.

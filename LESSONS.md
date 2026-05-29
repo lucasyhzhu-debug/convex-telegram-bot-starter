@@ -96,3 +96,118 @@ npx convex env set TELEGRAM_CHAT_ID=<your-chat-id>
 **The trap:** Your bot works fine in a regular group with chat_id `-123456789`. The group hits 200+ members and Telegram migrates it to a supergroup. The chat_id silently becomes `-100<digits>` (the supergroup format). Your bot, configured with the old ID, stops posting.
 
 **Fix:** Watch for it. See RUNBOOK #11 for the recovery sequence. It's expected somewhere in the lifecycle of every long-running bot whose chat grows past the regular-group cap.
+
+---
+
+# v2 lessons — self-registration & multi-chat routing
+
+---
+
+## 10. Convex crons fire once with no retry — a transient worker spike silently drops a scheduled send
+
+**The trap:** A cron-scheduled post just doesn't arrive. No error in the chat. The
+send-action's first step is a `getChatIdByRole` runQuery; if a transient Convex
+capacity error (`"There are no available workers to process the request"`) hits at
+firing time, that query throws *before any message is sent* and the post is lost.
+Convex crons fire **exactly once with no auto-retry**, so there's no second chance.
+(This dropped the source project's midday digest on 2026-05-29.)
+
+**The fix:** A thin `*Resilient` wrapper `internalAction` per cron-triggered send.
+It runs the real send via `ctx.runAction`; on a **transient error only**, it
+self-reschedules a backed-off retry (`scheduler.runAfter`, 60s/120s, 3 attempts);
+anything else rethrows so it surfaces in the cron dashboard. Crons point at the
+wrapper; the on-demand path (slash command, admin test-send) keeps calling the raw
+action — a human who sees no reply just re-issues it. See `convex/lib/cronRetry.ts`.
+
+**Three rules that keep retries safe:**
+1. **Retry transient errors only.** `isTransientError` matches just the Convex
+   overload substring, which can only occur *before* the send loop. A mid-send
+   Telegram failure doesn't match — retrying it would double-post earlier chunks.
+2. **Pre-send work that re-runs on retry must be idempotent** (an incremental data
+   refresh is fine; a non-idempotent write is not).
+3. **One wrapper per action, not a generic one.** `scheduler.runAfter` needs a
+   concrete function reference to reschedule, and references aren't serialisable as
+   args — so each wrapper must name itself. Only the *policy* is shared.
+
+---
+
+## 11. Role-indirection decouples a feed's identity from a chat id
+
+**The insight:** v1 hard-coded the destination in `TELEGRAM_CHAT_ID` — coupling a
+feed's *identity* ("the pack list") to a concrete *chat id*. Repointing meant an
+env edit + redeploy. Putting a stable **role** ("pack-list") between the send-action
+and the chat id, and resolving `role → chatId` at **send time** via
+`getChatIdByRole`, moves the binding into data. Repointing a feed becomes a row
+patch in the admin UI. No cached chat id exists anywhere; the freshest binding
+always wins. Adding a feed is: a role string in `config.ts` + a send-action — no
+new env var.
+
+---
+
+## 12. Archived rows MUST clear their role slot, atomically
+
+**The trap:** Soft-delete by setting `archivedAt` alone leaves the row still
+"holding" its role. Because role uniqueness is enforced by querying for an active
+holder, an archived-but-role-bearing row blocks reassigning that role to a live
+chat — and `getChatIdByRole` (which only matches `archivedAt === undefined`) skips
+it, so the feed silently routes nowhere.
+
+**The fix:** `archiveChat` patches `archivedAt` **and** clears `role` in one
+mutation — the slot frees immediately. Symmetrically, assigning a role to an
+archived chat is refused unless the caller passes `restoreIfArchived: true`, which
+un-archives + assigns in a single atomic write (the admin UI's "Restore and
+assign?"). Never split these into two writes — a crash between them leaves an
+inconsistent slot.
+
+---
+
+## 13. The `archivedAt`-undefined index ordering trap → one compound index
+
+**The trap:** You want two access paths: "active row for role X" and "list of active
+chats". The naive design is a `by_role` index + a post-scan `.filter(r =>
+r.archivedAt === undefined)`. But Convex sorts `undefined` (an absent optional)
+*before* all defined values in an index — the same trap as LESSON 1. An
+`archivedAt`-only index is unsafe for the same reason, and a `by_role` index pushes
+the active-check into a post-scan filter.
+
+**The fix:** A single compound index `by_role_archived` on `["role", "archivedAt"]`.
+`getChatIdByRole` queries `.eq("role", role).eq("archivedAt", undefined)` — both
+bounds inside the index, no post-scan filter. The same index serves the active-list
+path. For the full chat list (which includes archived), the table is bounded (one
+row per registered chat, typically < 100) so a `.collect()` + in-memory filter is
+cheap and sidesteps the ordering trap entirely.
+
+---
+
+## 14. Internal-core + key-gated public wrapper — one impl, two auth surfaces
+
+**The pattern:** Each management op (list / assignRole / archive / restore /
+test-send) has a private `…Impl` function plus two thin registrations: an
+`internal*` (`internalQuery`/`internalMutation`/`internalAction`, callable from the
+dashboard or `npx convex run`, no key) and an `admin*` (public, takes an `adminKey`
+arg, calls `requireAdminKey` then delegates to the same `…Impl`). No logic is
+duplicated; only the auth gate differs.
+
+**Why:** The starter has no user/session system, so the React admin app needs *some*
+gate — a single `ADMIN_KEY`, constant-time compared, **fail-closed when unset**.
+But operators with dashboard access shouldn't need a key at all (internal functions
+aren't publicly reachable). The split serves both without forking the implementation.
+When you embed this in an app that has real users, replace `requireAdminKey` with
+your auth (`requireRole`, session token) — only the `admin*` wrappers change.
+
+---
+
+## 15. The webhook's `MessageContext` — evolving a command signature without breaking callers
+
+**The trap:** v1 commands were zero-parameter (`dispatch: async () => {…}`). v2's
+`/register` needs to know *which* chat sent it — chat id, type, title, sender. Adding
+those as positional args would break every existing command.
+
+**The fix:** A single `MessageContext` object passed to every `dispatch`
+(`chatId`, `chatType`, `title`, `fromId`, `text`). Commands that need it read it;
+commands that don't (`/ping`) ignore the argument — a zero-parameter
+`dispatch: async () => {…}` is still assignable to `(msg: MessageContext) =>
+Promise<void>`. One backward-compatible signature evolution carried both the old
+commands and the new registry built-ins. The webhook also normalizes chat id to a
+**string** here (sidesteps the `-100…` supergroup number range) and coerces unknown
+chat types to `"group"`.

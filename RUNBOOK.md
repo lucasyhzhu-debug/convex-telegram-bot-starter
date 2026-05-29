@@ -165,3 +165,130 @@ Better long-term: separate bots for dev and prod (see SETUP step 9).
    ```
 
 This is expected somewhere in the lifecycle of every bot whose chat outgrows the regular-group cap. LESSON 9.
+
+---
+
+## 12. Scheduled message never arrived (transient worker spike)
+
+**Symptom:** A cron-scheduled post (daily digest, pack list) simply didn't show
+up. No error in the chat. The Convex Schedules tab shows the cron fired. Logs
+show something like:
+```
+[CONVEX Q(telegram/chatRegistry:getChatIdByRole)] There are no available workers to process the request
+[CONVEX A(.../sendX:sendX)] Uncaught Error: There are no available workers to process the request
+```
+
+**Cause:** Convex crons fire **exactly once, no auto-retry**. A transient
+capacity error (`"no available workers"`) hit the send-action's first step (the
+`getChatIdByRole` runQuery) *before* anything was sent, and the post was silently
+dropped.
+
+**Fix (immediate):** re-issue it on demand — run the raw send-action by hand:
+```bash
+npx convex run examples/packList/sendPackList:sendPackList '{"reason":"command"}' --prod
+```
+
+**Fix (permanent):** point the cron at a `*Resilient` wrapper, not the raw send.
+The wrapper retries transient errors only (60s / 120s, 3 attempts) and
+self-reschedules. See `convex/lib/cronRetry.ts`, ARCHITECTURE.md § "Cron
+resilience", and LESSON 10. Crons → wrapper; on-demand path → raw action.
+
+---
+
+## 13. `/register` did nothing
+
+**Symptom:** You sent `/register@<bot>` in a group and got no reply. The chat
+never appears in the admin UI. Convex logs show no incoming webhook for it.
+
+**Causes & fixes, in order of likelihood:**
+
+1. **`register` isn't in `/setcommands`.** Privacy mode (ON by default) means the
+   bot only sees registered commands and @mentions. Add `register` (and `start`)
+   via BotFather `/setcommands` — see SETUP step 7 / 2.4. Wait ~30s for the cache.
+2. **Webhook `allowed_updates` excludes `"message"`.** If the webhook was
+   registered without `"message"` in `allowed_updates`, the `/register` text
+   update is filtered out before reaching the webhook. Re-register with
+   `node scripts/register-webhook.mjs …` (it includes `"message"`). Verify with
+   `getWebhookInfo` → check `allowed_updates`.
+3. **Bot isn't actually in the group**, or was removed. Re-add it as a member.
+4. **`TELEGRAM_ADMIN_URL` / `TELEGRAM_BOT_USERNAME` unset** — registration still
+   works, but the reply shows the placeholder URL/name. Set them (SETUP 2.1).
+
+---
+
+## 14. Admin UI shows "Invalid admin key"
+
+**Symptom:** The React admin app refuses every call with `Invalid admin key` or
+`ADMIN_KEY env var is not set — refusing admin calls`.
+
+**Cause:** The `ADMIN_KEY` the app sends (stored in `localStorage`) doesn't match
+the `ADMIN_KEY` env var on the deployment — or the env var is unset (the gate
+**fails closed**).
+
+**Fix:**
+```bash
+npx convex env list                 # confirm ADMIN_KEY is set on this deployment
+npx convex env set ADMIN_KEY=<secret>   # set it if missing (generate via new-webhook-secret.mjs)
+```
+Then re-enter the key in the admin UI (clear it from `localStorage` if it cached
+a stale value). Make sure you're pointing at the right deployment — `VITE_CONVEX_URL`
+must match the deployment whose `ADMIN_KEY` you set. See SECURITY.md.
+
+---
+
+## 15. Role assigned but messages still go to the old group
+
+**Symptom:** You assigned a role to a new chat, but posts keep landing in the
+previous group (or nowhere you expect).
+
+**Causes & fixes:**
+
+1. **The env fallback is still set.** If `TELEGRAM_FALLBACK_ROLE` matches the
+   role AND `TELEGRAM_CHAT_ID` is set, step 2 of the lookup chain *only* fires
+   when no active row matches — so this is rarely the culprit once a row exists.
+   But if assignment didn't actually take, the fallback masks the failure. Confirm
+   the row is active:
+   ```bash
+   npx convex run telegram/chatRegistry:listChats '{"includeArchived":true}'
+   ```
+   Look for your chatId with the expected `role` and **no** `archivedAt`.
+2. **The target row is archived.** Assigning a role to an archived chat is a
+   dead-end — `getChatIdByRole` skips archived rows. Restore + assign atomically:
+   ```bash
+   # via admin UI: "Restore and assign?"  — or:
+   npx convex run telegram/chatRegistry:assignRole '{"chatId":"-100...","role":"alerts","restoreIfArchived":true}'
+   ```
+3. **Another chat still holds the role.** Role uniqueness means assigning to a new
+   chat throws unless you override:
+   ```bash
+   npx convex run telegram/chatRegistry:assignRole '{"chatId":"-100...","role":"alerts","forceReassign":true}'
+   ```
+   `forceReassign` clears the old holder's role and moves it in one mutation.
+4. **Migration leftover.** Once fully on the registry, unset the shim so the env
+   path can't shadow anything: `npx convex env unset TELEGRAM_FALLBACK_ROLE`.
+
+---
+
+## 16. Chat vanished after group upgraded to supergroup
+
+**Symptom:** A previously-working feed went quiet. The chat's row still exists but
+its `lastError` shows `Bad Request: chat not found`, or sends throw on that id.
+
+**Cause:** Telegram migrated the regular group to a supergroup; the chat id
+changed from `-NNN` to `-100NNN`. The old id is inert. The registry doesn't
+auto-handle `migrate_to_chat_id` (deferred), so the old row points at a dead id.
+
+**Fix (manual recovery):**
+1. Archive the old row (frees its role slot):
+   ```bash
+   npx convex run telegram/chatRegistry:archiveChat '{"chatId":"-987654321"}'
+   ```
+2. Ensure the bot is in the new supergroup (usually carried over with members).
+3. Send `/register@<bot>` in the supergroup — registers the new `-100…` id.
+4. Assign the same role to the new row:
+   ```bash
+   npx convex run telegram/chatRegistry:assignRole '{"chatId":"-100987654321","role":"pack-list"}'
+   ```
+
+See SELF-REGISTRATION.md § "Group → supergroup migration recovery". Related to
+the v1 env-var version of this trap in #11.

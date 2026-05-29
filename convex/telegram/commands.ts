@@ -1,16 +1,39 @@
 // convex/telegram/commands.ts
 
 /**
+ * The parsed message context handed to a command's `dispatch`. v2 added this so
+ * registry commands like `/register` can read which chat sent them. Commands that
+ * don't need it (e.g. `/ping`) simply ignore the argument — a zero-parameter
+ * `dispatch: async () => {…}` is still assignable to this signature.
+ */
+export interface MessageContext {
+  /** chat.id as a string (sidesteps the -100… supergroup number range). */
+  chatId: string;
+  /** Normalised chat type (anything unexpected is coerced to "group"). */
+  chatType: "private" | "group" | "supergroup";
+  /** chat.title, or "(untitled)" for private chats / missing titles. */
+  title: string;
+  /** Telegram user id of the sender, if present. */
+  fromId: number | undefined;
+  /** The raw message text that matched the command. */
+  text: string;
+}
+
+/**
  * Registration for a Telegram slash command. The webhook routes matched commands
  * to `dispatch`. Dispatch is async — the implementation typically schedules
  * an internalAction via `ctx.scheduler.runAfter(0, internal.X.Y, args)`, but
  * the registry is agnostic to that detail (only depends on a Promise return).
  */
 export interface CommandRegistration {
-  /** The command name WITHOUT the leading slash (e.g. "ping", "pack"). */
+  /** The command name WITHOUT the leading slash (e.g. "ping", "pack", "register"). */
   name: string;
-  /** Called when the command matches. Must not throw — wrap your runtime errors. */
-  dispatch: () => Promise<void>;
+  /**
+   * Called when the command matches, with the parsed message context. Must not
+   * throw — wrap your runtime errors (the webhook logs dispatch failures but
+   * always ACKs 200 to avoid Telegram's retry loop).
+   */
+  dispatch: (msg: MessageContext) => Promise<void>;
 }
 
 export interface CommandMatch {

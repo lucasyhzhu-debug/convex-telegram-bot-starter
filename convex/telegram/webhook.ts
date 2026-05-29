@@ -3,20 +3,42 @@ import { v } from "convex/values";
 import { httpAction, internalMutation } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { constantTimeEqual } from "../lib/constantTimeEqual";
-import { buildCommandMatcher, type CommandRegistration } from "./commands";
+import {
+  buildCommandMatcher,
+  type CommandRegistration,
+  type MessageContext,
+} from "./commands";
 
 interface WebhookResult { status: number; body: string }
 
 export interface WebhookDeps {
   /** R5: atomic dedupe. Returns true iff THIS call inserted the row. */
   recordIfNew: (updateId: number) => Promise<boolean>;
-  /** Matcher built from the example app's command registrations. */
+  /** Matcher built from the app's command registrations. */
   match: (text: string) => { command: CommandRegistration } | null;
+  /**
+   * Optional (v2): called best-effort for every NON-command message (any text
+   * that isn't a known slash command, plus non-text updates). Wire this to
+   * touchChatLastSeen when using the self-registration registry so the admin UI
+   * shows live "last seen" stamps. Omit it for the simple single-chat setup.
+   * Never deduped, never blocks the 200 ACK.
+   */
+  onNonCommandMessage?: (msg: MessageContext) => Promise<void>;
 }
 
 interface TelegramUpdate {
   update_id?: number;
-  message?: { message_id?: number; text?: string; chat?: { id?: number; type?: string }; from?: { id?: number } };
+  message?: {
+    message_id?: number;
+    text?: string;
+    chat?: { id?: number; type?: string; title?: string };
+    from?: { id?: number };
+  };
+}
+
+/** Coerce Telegram's chat.type string to our union, defaulting to "group". */
+function normalizeChatType(t: string | undefined): MessageContext["chatType"] {
+  return t === "private" || t === "group" || t === "supergroup" ? t : "group";
 }
 
 /**
@@ -29,6 +51,7 @@ export async function decideWebhookOutcome(input: {
   body: TelegramUpdate;
   deps: WebhookDeps;
 }): Promise<WebhookResult> {
+  // Auth — 401 before any state change.
   if (!input.expectedSecret || !input.providedSecret) {
     return { status: 401, body: "unauthorized" };
   }
@@ -37,21 +60,49 @@ export async function decideWebhookOutcome(input: {
   }
 
   const updateId = input.body.update_id;
-  const text = input.body.message?.text;
+  const msg = input.body.message;
   if (typeof updateId !== "number") return { status: 200, body: "ok" };
-  if (typeof text !== "string") return { status: 200, body: "ok" };
+  if (!msg) return { status: 200, body: "ok" };
 
-  const match = input.deps.match(text);
-  if (!match) return { status: 200, body: "ok" };
+  const chatIdNum = msg.chat?.id;
+  if (typeof chatIdNum !== "number") return { status: 200, body: "ok" };
+
+  const ctx: MessageContext = {
+    chatId: String(chatIdNum),
+    chatType: normalizeChatType(msg.chat?.type),
+    title: msg.chat?.title ?? "(untitled)",
+    fromId: msg.from?.id,
+    text: typeof msg.text === "string" ? msg.text : "",
+  };
+
+  // Best-effort lastSeen stamp — non-critical, never blocks the 200 ACK.
+  const tryTouch = async () => {
+    if (!input.deps.onNonCommandMessage) return;
+    try { await input.deps.onNonCommandMessage(ctx); } catch { /* best-effort */ }
+  };
+
+  // Non-text update (sticker, photo, …) — best-effort touch, no dedupe.
+  if (typeof msg.text !== "string") {
+    await tryTouch();
+    return { status: 200, body: "ok" };
+  }
+
+  const match = input.deps.match(ctx.text);
+  if (!match) {
+    // Unknown slash command → silent 200, no touch (typo, not chat activity).
+    // Regular text → best-effort lastSeen stamp.
+    if (!ctx.text.trim().startsWith("/")) await tryTouch();
+    return { status: 200, body: "ok" };
+  }
 
   const isNew = await input.deps.recordIfNew(updateId);
   if (!isNew) return { status: 200, body: "ok" };
 
-  // C3: never return non-200 once we've already committed the dedupe row. If
-  // dispatch throws, retries will see the row exists and skip — turning the
-  // transient error into a permanent 500 loop. ACK 200 and log instead.
+  // C3: never return non-200 once we've committed the dedupe row. If dispatch
+  // throws, retries see the row exists and skip — turning a transient error into
+  // a permanent 500 loop. ACK 200 and log instead.
   try {
-    await match.command.dispatch();
+    await match.command.dispatch(ctx);
   } catch (err) {
     console.warn("[telegram] dispatch failed after recordIfNew committed", err);
   }
@@ -83,13 +134,14 @@ export const recordIfNew = internalMutation({
  * `scheduler.runAfter(...)`, and `ctx.scheduler` is only valid INSIDE the
  * httpAction (not at module scope).
  *
- * Defined in this task with the final factory signature (not rewritten later)
- * so the webhook tests below match the shipped shape.
+ * The second arg opts into the self-registration registry: pass `true` to wire
+ * non-command messages to touchChatLastSeen. Leave it off for the simple setup.
  */
 import type { Scheduler } from "convex/server";
 
 export function buildHandleTelegramWebhook(
   buildRegistrations: (scheduler: Scheduler) => CommandRegistration[],
+  options?: { trackLastSeen?: boolean },
 ) {
   return httpAction(async (ctx, request) => {
     let body: TelegramUpdate;
@@ -108,6 +160,11 @@ export function buildHandleTelegramWebhook(
         recordIfNew: (updateId) =>
           ctx.runMutation(internal.telegram.webhook.recordIfNew, { updateId }),
         match,
+        onNonCommandMessage: options?.trackLastSeen
+          ? async (m) => {
+              await ctx.runMutation(internal.telegram.chatRegistry.touchChatLastSeen, { chatId: m.chatId });
+            }
+          : undefined,
       },
     });
     return new Response(outcome.body, { status: outcome.status });

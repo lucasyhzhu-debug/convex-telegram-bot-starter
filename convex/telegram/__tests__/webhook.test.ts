@@ -24,6 +24,19 @@ function makeDeps(opts: {
 
 const SECRET = "expected-secret";
 
+// v2: the webhook builds a MessageContext, so real envelopes always carry chat.id.
+// This helper keeps every test message realistic (id + type + title).
+function body(updateId: number, text?: string) {
+  return {
+    update_id: updateId,
+    message: {
+      ...(text !== undefined ? { text } : {}),
+      chat: { id: -1001234567890, type: "supergroup", title: "Ops Group" },
+      from: { id: 42 },
+    },
+  };
+}
+
 describe("decideWebhookOutcome", () => {
   // Tests 1-3: auth
   it("test 1: returns 401 when expectedSecret env is unset", async () => {
@@ -31,7 +44,7 @@ describe("decideWebhookOutcome", () => {
     const result = await decideWebhookOutcome({
       providedSecret: "any",
       expectedSecret: undefined,
-      body: { update_id: 1, message: { text: "/example", chat: { id: -100, type: "supergroup" } } },
+      body: body(1, "/example"),
       deps,
     });
     expect(result.status).toBe(401);
@@ -42,7 +55,7 @@ describe("decideWebhookOutcome", () => {
     const result = await decideWebhookOutcome({
       providedSecret: null,
       expectedSecret: SECRET,
-      body: { update_id: 1, message: { text: "/example" } },
+      body: body(1, "/example"),
       deps,
     });
     expect(result.status).toBe(401);
@@ -53,7 +66,7 @@ describe("decideWebhookOutcome", () => {
     const result = await decideWebhookOutcome({
       providedSecret: "wrong",
       expectedSecret: SECRET,
-      body: { update_id: 1, message: { text: "/example" } },
+      body: body(1, "/example"),
       deps,
     });
     expect(result.status).toBe(401);
@@ -65,7 +78,7 @@ describe("decideWebhookOutcome", () => {
     const result = await decideWebhookOutcome({
       providedSecret: SECRET,
       expectedSecret: SECRET,
-      body: { update_id: 1, message: { text: "/example" } },
+      body: body(1, "/example"),
       deps,
     });
     expect(result.status).toBe(200);
@@ -77,7 +90,7 @@ describe("decideWebhookOutcome", () => {
     const result = await decideWebhookOutcome({
       providedSecret: SECRET,
       expectedSecret: SECRET,
-      body: { update_id: 2, message: { text: "/example@MyBot" } },
+      body: body(2, "/example@MyBot"),
       deps,
     });
     expect(result.status).toBe(200);
@@ -90,7 +103,7 @@ describe("decideWebhookOutcome", () => {
     const result = await decideWebhookOutcome({
       providedSecret: SECRET,
       expectedSecret: SECRET,
-      body: { update_id: 3, message: { text: "hello" } },
+      body: body(3, "hello"),
       deps,
     });
     expect(result.status).toBe(200);
@@ -115,7 +128,7 @@ describe("decideWebhookOutcome", () => {
     const result = await decideWebhookOutcome({
       providedSecret: SECRET,
       expectedSecret: SECRET,
-      body: { update_id: 5, message: { text: "/example now please" } },
+      body: body(5, "/example now please"),
       deps,
     });
     expect(result.status).toBe(200);
@@ -129,7 +142,7 @@ describe("decideWebhookOutcome", () => {
     const result = await decideWebhookOutcome({
       providedSecret: SECRET,
       expectedSecret: SECRET,
-      body: { update_id: 6, message: { text: "/example" } },
+      body: body(6, "/example"),
       deps,
     });
     expect(result.status).toBe(200);
@@ -151,7 +164,7 @@ describe("decideWebhookOutcome", () => {
     const result = await decideWebhookOutcome({
       providedSecret: SECRET,
       expectedSecret: SECRET,
-      body: { update_id: 7, message: { text: "/example" } },
+      body: body(7, "/example"),
       deps,
     });
     expect(result.status).toBe(200);
@@ -164,7 +177,7 @@ describe("decideWebhookOutcome", () => {
     const result = await decideWebhookOutcome({
       providedSecret: SECRET,
       expectedSecret: SECRET,
-      body: { update_id: 8, message: { text: "/example@MyBot" } },
+      body: body(8, "/example@MyBot"),
       deps,
     });
     expect(result.status).toBe(200);
@@ -183,11 +196,72 @@ describe("decideWebhookOutcome", () => {
     const result = await decideWebhookOutcome({
       providedSecret: SECRET,
       expectedSecret: SECRET,
-      body: { update_id: 9, message: { text: "/example" } },
+      body: body(9, "/example"),
       deps,
     });
     expect(result.status).toBe(200);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  // ── v2: MessageContext + onNonCommandMessage ────────────────────────────────
+
+  it("test 13 (v2): dispatch receives the parsed MessageContext", async () => {
+    const seen: unknown[] = [];
+    const dispatch = vi.fn().mockImplementation(async (msg: unknown) => { seen.push(msg); });
+    const cmd: CommandRegistration = { name: "example", dispatch };
+    const deps = { recordIfNew: vi.fn().mockResolvedValue(true), match: buildCommandMatcher([cmd]) };
+    await decideWebhookOutcome({
+      providedSecret: SECRET,
+      expectedSecret: SECRET,
+      body: body(10, "/example"),
+      deps,
+    });
+    expect(seen[0]).toMatchObject({
+      chatId: "-1001234567890",
+      chatType: "supergroup",
+      title: "Ops Group",
+      fromId: 42,
+      text: "/example",
+    });
+  });
+
+  it("test 14 (v2): non-command text calls onNonCommandMessage (best-effort touch)", async () => {
+    const onNonCommandMessage = vi.fn().mockResolvedValue(undefined);
+    const { deps } = makeDeps({});
+    const result = await decideWebhookOutcome({
+      providedSecret: SECRET,
+      expectedSecret: SECRET,
+      body: body(11, "good morning"),
+      deps: { ...deps, onNonCommandMessage },
+    });
+    expect(result.status).toBe(200);
+    expect(onNonCommandMessage).toHaveBeenCalledTimes(1);
+    expect(onNonCommandMessage.mock.calls[0]![0]).toMatchObject({ chatId: "-1001234567890" });
+  });
+
+  it("test 15 (v2): unknown slash command does NOT touch (typo, not activity)", async () => {
+    const onNonCommandMessage = vi.fn().mockResolvedValue(undefined);
+    const { deps } = makeDeps({});
+    const result = await decideWebhookOutcome({
+      providedSecret: SECRET,
+      expectedSecret: SECRET,
+      body: body(12, "/unknown"),
+      deps: { ...deps, onNonCommandMessage },
+    });
+    expect(result.status).toBe(200);
+    expect(onNonCommandMessage).not.toHaveBeenCalled();
+  });
+
+  it("test 16 (v2): onNonCommandMessage that throws never breaks the 200 ACK", async () => {
+    const onNonCommandMessage = vi.fn().mockRejectedValue(new Error("touch failed"));
+    const { deps } = makeDeps({});
+    const result = await decideWebhookOutcome({
+      providedSecret: SECRET,
+      expectedSecret: SECRET,
+      body: body(13, "hello"),
+      deps: { ...deps, onNonCommandMessage },
+    });
+    expect(result.status).toBe(200);
   });
 });

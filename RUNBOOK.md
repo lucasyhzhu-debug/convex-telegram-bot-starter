@@ -292,3 +292,89 @@ auto-handle `migrate_to_chat_id` (deferred), so the old row points at a dead id.
 
 See SELF-REGISTRATION.md § "Group → supergroup migration recovery". Related to
 the v1 env-var version of this trap in #11.
+
+---
+
+## 17. `POST /post-message` returns 401 (external brain can't post back)
+
+**Symptom:** The local worker / `wiki-brain` runs fine but its reply never lands
+in Telegram; the HTTP call to `/post-message` returns `401 unauthorized`.
+
+**Cause:** `/post-message` is gated by the **same** secret as the webhook —
+`TELEGRAM_WEBHOOK_SECRET`, sent in the `X-Telegram-Bot-Api-Secret-Token` header
+and constant-time compared. A 401 means the header is missing or doesn't match
+the deployment's `TELEGRAM_WEBHOOK_SECRET`.
+
+**Fix:**
+```bash
+npx convex env get TELEGRAM_WEBHOOK_SECRET          # the value the worker must send
+# worker must send it verbatim as the header:
+curl -X POST "$CONVEX_SITE_URL/post-message" \
+  -H "X-Telegram-Bot-Api-Secret-Token: <secret>" \
+  -H "Content-Type: application/json" \
+  -d '{"html":"<b>hi</b>","role":"brain"}'
+```
+There is **no separate env var** for this endpoint — it deliberately reuses
+`TELEGRAM_WEBHOOK_SECRET` so there's one secret to rotate. If you rotate it,
+update both the Telegram webhook registration and the worker's config.
+
+Other `/post-message` status codes:
+- `400` — `html` missing/empty, or neither `chatId` nor `role` supplied.
+- `404` — `role` given but no active chat is assigned to it (assign one in the
+  admin UI, or post by `chatId`). Same lookup chain as #15.
+- `502` — Telegram itself rejected the send (bad `chatId`, bot not in chat).
+
+---
+
+## 18. Captured messages pile up in the inbox (nothing gets processed)
+
+**Symptom:** You send links/notes to the bot, get the "saving this…" ack, but no
+summary ever comes back and the wiki never updates. `inbox` rows stay `pending`.
+
+**Cause:** Capture (Convex) and processing (the external brain) are decoupled on
+purpose — **Convex never runs the LLM.** Rows sit `pending` until the *local
+worker* drains them. If the worker isn't running (laptop asleep, process died,
+wrong deployment URL), nothing advances. This is expected, not a bug.
+
+**Diagnosis:**
+```bash
+# How many are waiting?
+npx convex run inbox:listPending '{"limit":50}'
+```
+
+**Fix:** start the drain worker. The loop it runs is:
+1. `inbox.listPending({limit})` over the Convex HTTP `/api` → pending rows.
+2. `claude -p "/process-inbox"` — `wiki-brain` ingests each `save` source or
+   answers each `ask`.
+3. `POST /post-message` with the summary/answer (`{html, chatId|role}`).
+4. `inbox.markDrained({ids})` — idempotent, so retrying after a network error is
+   safe (already-drained rows are skipped).
+
+`listPending` / `markDrained` are **public and unauthenticated** by design (the
+worker's API, single-tenant deployment) — no `ADMIN_KEY` needed. To manually
+clear a stuck row without processing it:
+```bash
+npx convex run inbox:markDrained '{"ids":["<inbox_id>"]}'
+```
+
+---
+
+## 19. Bot answers a follow-up with no context — or carries context you wanted dropped
+
+**Symptom:** You ask a follow-up ("and the second one?") and the brain answers as
+if it's a fresh question; or, conversely, a brand-new topic gets answered against
+stale earlier context.
+
+**Cause:** Context comes from the **active thread**. A thread stays active only
+while messages arrive within `THREAD_IDLE_MS` (3 h, `convex/messages.ts`). After
+that the next message opens a new thread and `getSessionContext` returns `[]` —
+so a long gap legitimately drops context. New-topic bleed is the inverse: you're
+still inside the 3 h window so the prior turns are still in scope.
+
+**Fix:** send `/new` to reset the active thread immediately (it marks the active
+thread idle; the next message starts clean and the bot replies "🆕 Fresh
+thread started"). `/new` is a slash command, so it's logged but never captured to
+the inbox. To inspect what context the brain would see:
+```bash
+npx convex run messages:getSessionContext '{"chatId":"<chatId>","limit":20}'
+```

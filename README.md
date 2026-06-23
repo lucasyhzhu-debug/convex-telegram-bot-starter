@@ -48,6 +48,70 @@ The v1 single-chat path still works unchanged (the registry falls back to
 **[docs/SELF-REGISTRATION.md](docs/SELF-REGISTRATION.md)** for the walkthrough and
 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the model.
 
+## What's new in v3 — knowledge inbox + external brain
+
+The same plumbing that posts ops digests turns out to be exactly what an
+LLM-powered second brain needs: a place to **capture** things from your phone, a
+**memory** of the conversation, and a way to **reply**. So this deployment
+(`@LucasKnowledgeBot`) also serves as the transport + memory layer for an
+external Claude Code agent called `wiki-brain` that maintains a personal markdown
+wiki.
+
+The split is deliberate:
+
+> **Convex = transport + memory + Telegram I/O. The external agent = the intelligence.**
+
+Convex can't run the LLM — so it doesn't try. It captures messages, queues them,
+logs the conversation, and routes replies. A **local worker** polls the inbox and
+runs the brain headlessly (`claude -p "/process-inbox"`); the brain ingests the
+source (or answers the question) and posts the result back through
+`POST /post-message`.
+
+```
+ You (Telegram)
+     │  "https://… under recipes"   or   "what do I know about sourdough?"
+     ▼
+ POST /telegram-webhook
+     │  dedupe (update_id) → classify save|ask → enqueue → instant ack
+     ▼
+ inbox table  (status: pending)
+     │
+     │  local worker:  listPending  →  claude -p "/process-inbox"
+     ▼
+ wiki-brain (external Claude Code agent)
+     │  ingest source / answer question against the markdown wiki
+     ▼
+ POST /post-message   (X-Telegram-Bot-Api-Secret-Token)
+     │  resolve chatId|role → sendTelegramHtml (chunked) → markDrained
+     ▼
+ You (Telegram)  ← summary / answer / daily digest
+```
+
+What capture does with your message:
+
+- A **URL**, an `under <category>` prefix, or a `#tag` → **save** (filed to the
+  wiki under that category; default category `inbox`).
+- Plain prose / a question → **ask** (answered from the wiki).
+- `save:` / `ask:` prefixes force the op. `youtube` links are detected as their
+  own `kind`. Slash commands are never captured.
+
+Alongside the inbox, every turn is logged to a `messages` table and grouped into
+per-chat **threads** (a session window; idle 3 h opens a fresh one). The brain
+reads `getSessionContext` so follow-up questions stay coherent, and `listSince`
+for a weekly review. Send `/new` to start a fresh thread on demand.
+
+| Surface | What it's for |
+|---------|---------------|
+| `POST /post-message` | external brain posts answers / summaries / digests back (secret-gated; `{html, chatId?\|role?}`) |
+| `inbox.listPending` / `inbox.markDrained` | the drain worker's queue API (public, over the Convex `/api`) |
+| `messages.getSessionContext` / `messages.listSince` | session context + weekly-review reads |
+| `/new` command | reset the active thread |
+| role `"brain"` | daily-digest destination |
+
+The ops-digest examples (pack list, hello-world) still ship on disk — this
+deployment just doesn't register them. See
+**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the table/intent/session model.
+
 ## What this is good for
 
 Telegram bots are the cheapest, lowest-friction way to put your back-end into a team's chat. No app to build, no per-seat license, no extra dashboard for ops to log into. The message just lands in the group everyone already has open all day.
@@ -84,8 +148,11 @@ You'll have hello-world running in your Telegram group at the end of step 8.
 
 - `convex/lib/` — `telegramHtml`, `chunking`, `constantTimeEqual`, `dateAnchors` (defensive utilities, fully tested)
 - `convex/telegram/` — `webhook` (pure-core + httpAction factory), `commands` (strict-mode registry)
-- `convex/examples/helloWorld/` — the 5-minute path
-- `convex/examples/packList/` — sanitized real-world reference (query → format → chunk → send)
+- `convex/inbox.ts` + `convex/inbox/capture.ts` — knowledge-inbox capture, classification (save/ask), and the public drain API (`listPending` / `markDrained`)
+- `convex/messages.ts` — conversation log + thread sessions (`getSessionContext`, `listSince`)
+- `convex/telegram/threadCommands.ts` — the `/new` reset-thread command
+- `convex/examples/helloWorld/` — the 5-minute path (reference; not registered in this deployment)
+- `convex/examples/packList/` — sanitized real-world reference, query → format → chunk → send (reference; not registered)
 - `scripts/` — `verify-no-secrets`, `new-webhook-secret`, `register-webhook` (PowerShell-safe)
 - `SETUP.md`, `SECURITY.md`, `RUNBOOK.md`, `LESSONS.md` — the playbook
 

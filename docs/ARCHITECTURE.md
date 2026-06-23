@@ -249,6 +249,127 @@ Only crons point at the wrapper. See
 
 ---
 
+## Knowledge inbox + external brain (v3)
+
+v2 routes *outbound* feeds to groups. v3 adds the *inbound + memory* half: this
+deployment becomes the transport and memory layer for an **external** Claude Code
+agent (`wiki-brain`) that owns a personal markdown wiki. The boundary is sharp:
+
+> **Convex = transport + memory + Telegram I/O. The external agent = the
+> intelligence.** Convex cannot run the LLM, so it never tries — it captures,
+> queues, logs, and routes.
+
+```
+ ┌───────────┐  text msg   ╔══════════════════════════════════════════╗
+ │ Telegram  │ ──────────▶ ║  POST /telegram-webhook                  ║
+ │  (you)    │             ║   • dedupe (recordIfNew, update_id)      ║
+ └───────────┘             ║   • non-command text → captureAndAck     ║
+       ▲                   ╚════════════════════╤═════════════════════╝
+       │ ack / answer                           │ schedule.runAfter(0)
+       │ (sendTelegramHtml)                     ▼
+       │                   ┌──────────────────────────────────────────┐
+       │                   │ captureAndAck (internalAction)           │
+       │                   │  1. resolveThread  (sessions)            │
+       │                   │  2. logMessage (in)  → messages table    │
+       │                   │  3. classifyIntent → save | ask          │
+       │                   │  4. enqueue → inbox table (pending)      │
+       │                   │  5. instant ack  → logMessage (out)      │
+       │                   └──────────────────────────────────────────┘
+       │                                        │
+       │           ┌─────────── Convex /api (public, unauthenticated) ┐
+       │           │ inbox.listPending / inbox.markDrained            │
+       │           │ messages.getSessionContext / messages.listSince  │
+       │           └──────────────────────┬───────────────────────────┘
+       │                                  │ poll
+       │              ┌───────────────────▼───────────────────┐
+       │              │ local worker:  claude -p "/process-inbox"│
+       │              │   = wiki-brain (the intelligence)        │
+       │              └───────────────────┬───────────────────┘
+       │  POST /post-message               │
+       └───────────────────────────────────┘
+          (X-Telegram-Bot-Api-Secret-Token)
+```
+
+### The three tables
+
+| Table | Index(es) | Purpose |
+|-------|-----------|---------|
+| `inbox` | `by_status` | One row per captured item the brain must process. `category`, `source`, `kind` (`url`\|`text`\|`youtube`), `status` (`pending`\|`drained`), `createdAt`, `chatId`, optional `raw`, optional `op` (`save`\|`ask`). |
+| `messages` | `by_chat_created`, `by_created` | Append-only log of **every** turn. `chatId`, `direction` (`in`\|`out`), `text`, optional `intent` (`save`\|`ask`\|`command`\|`other`), `op?`, `threadId?`, `updateId?`, `createdAt`. |
+| `threads` | `by_chat` | Session window. `chatId`, `startedAt`, `lastActiveAt`, `status` (`active`\|`idle`), optional `summary`. |
+
+### Capture + intent model
+
+The webhook is wired with `{ trackLastSeen: true, captureInbox: true }`. Capture
+only fires for **non-command text** (slash commands — `/register`, `/start`,
+`/new` — are never captured), and only **after `recordIfNew` commits** for that
+`update_id`, so Telegram retries never double-insert. The capture itself is
+scheduled (`runAfter(0, inbox.capture.captureAndAck)`) — best-effort, never
+blocking the 200 ACK.
+
+`captureAndAck` then `classifyIntent`s the message (`convex/inbox/capture.ts`):
+
+| Signal | Result |
+|--------|--------|
+| `save:` prefix | `op = save` |
+| `ask:` prefix | `op = ask`, category `ask` |
+| contains a URL | `op = save` (kind `youtube` if a youtu.be/youtube link, else `url`) |
+| `under <category>` prefix or `#tag` (leading/trailing) | `op = save`, that category |
+| plain prose / question | `op = ask`, category `ask` |
+
+The category from `under <cat>` / `#tag` is stripped from `source`; the default
+category is `inbox`. The result is logged to `messages` (direction `in`, with
+`intent`/`op`), enqueued to `inbox`, and acked instantly ("saving this…" for
+save, "looking that up…" for ask).
+
+### Sessions (`threads`)
+
+`resolveThread` reuses the chat's most-recent thread if its `lastActiveAt` is
+within `THREAD_IDLE_MS` (3 h); otherwise it marks the old thread `idle` and opens
+a fresh `active` one. `getSessionContext({chatId,limit})` returns the recent
+turns of the **active** thread (oldest-first) so the brain keeps follow-up
+questions coherent; it returns `[]` once the thread has gone idle.
+`listSince({sinceMs,limit})` returns all messages in a time range for the weekly
+review. `/new` calls `resetActiveThread`, marking the active thread idle so the
+next message starts clean.
+
+### The outbound path: `POST /post-message`
+
+This is how the **external brain posts back** — per-source summaries (to the
+originating `chatId`), answers, and the daily digest (to role `"brain"`). It is
+the mirror image of the webhook:
+
+- **Auth:** header `X-Telegram-Bot-Api-Secret-Token`, constant-time compared
+  against `TELEGRAM_WEBHOOK_SECRET` — the *same* secret the webhook uses, reused
+  here. 401 on missing/mismatched.
+- **Body:** `{ html: string, chatId?: string, role?: string }`. Exactly one of
+  `chatId` / `role` is required; `chatId` wins if both present, otherwise `role`
+  resolves through `getChatIdByRole` (404 if unassigned — reusing the v2 lookup
+  chain).
+- **Send:** `sendTelegramHtml(token, chatId, html)` (chunked, same as every
+  outbound path), then a best-effort `logMessage` (direction `out`).
+
+### The external-worker pattern
+
+Convex is a serverless runtime — it has no long-lived process to run an agent
+loop, and it can't execute the LLM. So the intelligence lives in a **local
+worker** outside Convex that:
+
+1. polls `inbox.listPending` over the Convex HTTP `/api`,
+2. runs the brain headlessly (`claude -p "/process-inbox"`) — `wiki-brain`
+   ingests each source or answers each question against the markdown wiki,
+3. posts the result back via `POST /post-message`,
+4. calls `inbox.markDrained({ids})` to clear the processed rows (idempotent, so a
+   retry after a network blip is safe).
+
+`listPending` / `markDrained` / `getSessionContext` / `listSince` are
+**intentionally public and unauthenticated** — they are the worker's API, and the
+deployment is single-tenant. (If you embed this in a multi-tenant app, gate them
+the same way the v2 `admin*` functions are gated; see SECURITY.md.) Capture
+(`enqueue`) stays internal: only the webhook path may write to the inbox.
+
+---
+
 ## File map (v2 additions)
 
 | File | Role |
@@ -261,3 +382,16 @@ Only crons point at the wrapper. See
 | `convex/telegram/commands.ts` | `CommandRegistration`, `MessageContext` |
 | `convex/lib/cronRetry.ts` | transient-error retry policy |
 | `src/` (React) | the `/admin/telegram-chats` admin app — `npm run dev:web` |
+
+## File map (v3 additions)
+
+| File | Role |
+|------|------|
+| `convex/schema.ts` | `inbox`, `messages`, `threads` tables + their indexes |
+| `convex/inbox.ts` | public `listPending` / `markDrained`, internal `enqueue` |
+| `convex/inbox/capture.ts` | `parseCapture` / `classifyIntent` / `detectKind` + `captureAndAck` internalAction |
+| `convex/messages.ts` | `logMessage`, `resolveThread`, `resetActiveThread` (internal); `getSessionContext`, `listSince` (public); `THREAD_IDLE_MS` |
+| `convex/telegram/threadCommands.ts` | `/new` — reset the active thread |
+| `convex/telegram/webhook.ts` | `captureInbox` option + `capture` dep |
+| `convex/http.ts` | `POST /post-message` outbound endpoint; example commands de-registered |
+| `convex/telegram/config.ts` | `"brain"` role added to `KNOWN_TELEGRAM_ROLES` |

@@ -23,6 +23,7 @@
 export const KNOWN_TELEGRAM_ROLES = [
   // "pack-list",
   // "sales-updates",
+  "brain",   // wiki-brain daily digest destination
 ] as const;
 
 export type TelegramRole = (typeof KNOWN_TELEGRAM_ROLES)[number];

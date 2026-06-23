@@ -65,4 +65,56 @@ export default defineSchema({
     isCancelled: v.optional(v.boolean()),
   })
     .index("by_order", ["orderId"]),
+
+  // ── Knowledge inbox ───────────────────────────────────────────────────────
+  // One row per captured item (URL, text snippet, YouTube link). The external
+  // wiki-brain drain worker polls listPending, processes each row, then calls
+  // markDrained. Capture is deduplicated via telegramUpdates (update_id), so
+  // Telegram retries never double-insert.
+  inbox: defineTable({
+    category: v.string(),
+    source: v.string(),
+    kind: v.union(v.literal("url"), v.literal("text"), v.literal("youtube")),
+    status: v.union(v.literal("pending"), v.literal("drained")),
+    createdAt: v.number(),
+    chatId: v.string(),
+    raw: v.optional(v.string()),        // original unstripped message text
+    summarySent: v.optional(v.boolean()),
+    op: v.optional(v.union(v.literal("save"), v.literal("ask"))),
+  }).index("by_status", ["status"]),
+
+  // ── Message log ──────────────────────────────────────────────────────────
+  // Append-only log of every inbound and outbound message per chat.
+  // Used by wiki-brain for session context (getSessionContext) and weekly
+  // review (listSince).
+  messages: defineTable({
+    chatId: v.string(),
+    direction: v.union(v.literal("in"), v.literal("out")),
+    text: v.string(),
+    intent: v.optional(v.union(
+      v.literal("save"),
+      v.literal("ask"),
+      v.literal("command"),
+      v.literal("other"),
+    )),
+    op: v.optional(v.string()),
+    threadId: v.optional(v.id("threads")),
+    updateId: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_chat_created", ["chatId", "createdAt"])
+    .index("by_created", ["createdAt"]),
+
+  // ── Conversation threads ──────────────────────────────────────────────────
+  // A thread groups messages within a session window (THREAD_IDLE_MS = 3 h).
+  // When the user is idle for longer than the window, the next message opens a
+  // new thread. This keeps context for follow-up questions coherent.
+  threads: defineTable({
+    chatId: v.string(),
+    startedAt: v.number(),
+    lastActiveAt: v.number(),
+    status: v.union(v.literal("active"), v.literal("idle")),
+    summary: v.optional(v.string()),
+  })
+    .index("by_chat", ["chatId"]),
 });

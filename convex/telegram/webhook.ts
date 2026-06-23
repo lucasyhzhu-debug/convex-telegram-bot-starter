@@ -24,6 +24,14 @@ export interface WebhookDeps {
    * Never deduped, never blocks the 200 ACK.
    */
   onNonCommandMessage?: (msg: MessageContext) => Promise<void>;
+  /**
+   * Optional (knowledge-inbox): deduped capture for non-command text messages.
+   * Called AFTER recordIfNew returns true (i.e., this is the first delivery of
+   * this update_id). Must not throw — wrap errors internally. Receives the full
+   * message context and the raw text. Scheduled best-effort; never blocks the
+   * 200 ACK.
+   */
+  capture?: (msg: MessageContext, updateId: number) => Promise<void>;
 }
 
 interface TelegramUpdate {
@@ -44,6 +52,13 @@ function normalizeChatType(t: string | undefined): MessageContext["chatType"] {
 /**
  * Pure handler — no Convex runtime dependency. The httpAction wires `ctx` into
  * `deps`. Exported separately so it's unit-testable without convex-test.
+ *
+ * Message routing matrix:
+ *   non-text update      → best-effort touch, no dedupe, 200
+ *   unknown slash cmd    → silent 200, no touch, no capture
+ *   known command        → dedupe via recordIfNew, then dispatch
+ *   regular text         → best-effort touch; if capture dep provided,
+ *                          ALSO dedupe via recordIfNew then call capture
  */
 export async function decideWebhookOutcome(input: {
   providedSecret: string | null;
@@ -88,13 +103,33 @@ export async function decideWebhookOutcome(input: {
   }
 
   const match = input.deps.match(ctx.text);
+
   if (!match) {
-    // Unknown slash command → silent 200, no touch (typo, not chat activity).
-    // Regular text → best-effort lastSeen stamp.
-    if (!ctx.text.trim().startsWith("/")) await tryTouch();
+    // Unknown slash command → silent 200, no touch, no capture (typo).
+    if (ctx.text.trim().startsWith("/")) {
+      return { status: 200, body: "ok" };
+    }
+
+    // Regular text message — best-effort lastSeen touch (always).
+    await tryTouch();
+
+    // Deduped capture — only if a capture dep is wired.
+    if (input.deps.capture) {
+      // C3 applies here too: once we commit recordIfNew we must still return 200.
+      const isNew = await input.deps.recordIfNew(updateId);
+      if (isNew) {
+        try {
+          await input.deps.capture(ctx, updateId);
+        } catch (err) {
+          console.warn("[telegram] capture failed after recordIfNew committed", err);
+        }
+      }
+    }
+
     return { status: 200, body: "ok" };
   }
 
+  // Known command path — dedupe then dispatch.
   const isNew = await input.deps.recordIfNew(updateId);
   if (!isNew) return { status: 200, body: "ok" };
 
@@ -134,14 +169,15 @@ export const recordIfNew = internalMutation({
  * `scheduler.runAfter(...)`, and `ctx.scheduler` is only valid INSIDE the
  * httpAction (not at module scope).
  *
- * The second arg opts into the self-registration registry: pass `true` to wire
- * non-command messages to touchChatLastSeen. Leave it off for the simple setup.
+ * Options:
+ *   trackLastSeen — wire non-command messages to touchChatLastSeen (admin UI).
+ *   captureInbox  — wire non-command text to the knowledge-inbox capture path.
  */
 import type { Scheduler } from "convex/server";
 
 export function buildHandleTelegramWebhook(
   buildRegistrations: (scheduler: Scheduler) => CommandRegistration[],
-  options?: { trackLastSeen?: boolean },
+  options?: { trackLastSeen?: boolean; captureInbox?: boolean },
 ) {
   return httpAction(async (ctx, request) => {
     let body: TelegramUpdate;
@@ -163,6 +199,17 @@ export function buildHandleTelegramWebhook(
         onNonCommandMessage: options?.trackLastSeen
           ? async (m) => {
               await ctx.runMutation(internal.telegram.chatRegistry.touchChatLastSeen, { chatId: m.chatId });
+            }
+          : undefined,
+        capture: options?.captureInbox
+          ? async (m, updateId) => {
+              // Schedule best-effort — never awaited in-band; a throw here would
+              // already be caught by decideWebhookOutcome's try/catch.
+              await ctx.scheduler.runAfter(
+                0,
+                internal.inbox.capture.captureAndAck,
+                { chatId: m.chatId, raw: m.text, updateId },
+              );
             }
           : undefined,
       },

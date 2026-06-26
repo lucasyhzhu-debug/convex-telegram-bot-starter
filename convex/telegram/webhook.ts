@@ -11,6 +11,15 @@ import {
 
 interface WebhookResult { status: number; body: string }
 
+export interface DocumentInfo {
+  fileId: string;
+  fileName?: string;
+  mimeType?: string;
+  caption?: string;
+  /** True when this came from a native photo (message.photo) rather than a file attachment. */
+  isImage?: boolean;
+}
+
 export interface WebhookDeps {
   /** R5: atomic dedupe. Returns true iff THIS call inserted the row. */
   recordIfNew: (updateId: number) => Promise<boolean>;
@@ -25,13 +34,14 @@ export interface WebhookDeps {
    */
   onNonCommandMessage?: (msg: MessageContext) => Promise<void>;
   /**
-   * Optional (knowledge-inbox): deduped capture for non-command text messages.
-   * Called AFTER recordIfNew returns true (i.e., this is the first delivery of
-   * this update_id). Must not throw — wrap errors internally. Receives the full
-   * message context and the raw text. Scheduled best-effort; never blocks the
-   * 200 ACK.
+   * Optional (knowledge-inbox): deduped capture for non-command text messages
+   * and document (file) uploads. Called AFTER recordIfNew returns true (i.e.,
+   * this is the first delivery of this update_id). Must not throw — wrap errors
+   * internally. Receives the full message context, the update_id, and an
+   * optional document descriptor (present for file uploads, absent for text).
+   * Scheduled best-effort; never blocks the 200 ACK.
    */
-  capture?: (msg: MessageContext, updateId: number) => Promise<void>;
+  capture?: (msg: MessageContext, updateId: number, document?: DocumentInfo) => Promise<void>;
 }
 
 interface TelegramUpdate {
@@ -39,6 +49,20 @@ interface TelegramUpdate {
   message?: {
     message_id?: number;
     text?: string;
+    caption?: string;
+    document?: {
+      file_id: string;
+      file_name?: string;
+      mime_type?: string;
+      file_size?: number;
+    };
+    photo?: Array<{
+      file_id: string;
+      file_unique_id?: string;
+      width?: number;
+      height?: number;
+      file_size?: number;
+    }>;
     chat?: { id?: number; type?: string; title?: string };
     from?: { id?: number };
   };
@@ -96,7 +120,57 @@ export async function decideWebhookOutcome(input: {
     try { await input.deps.onNonCommandMessage(ctx); } catch { /* best-effort */ }
   };
 
-  // Non-text update (sticker, photo, …) — best-effort touch, no dedupe.
+  // Document (file upload) — dedupe + capture, then 200.
+  // A document message has msg.document but no msg.text (caption lives in msg.caption).
+  if (msg.document && typeof msg.document.file_id === "string") {
+    const doc: DocumentInfo = {
+      fileId: msg.document.file_id,
+      fileName: msg.document.file_name,
+      mimeType: msg.document.mime_type,
+      caption: typeof msg.caption === "string" ? msg.caption : undefined,
+    };
+    if (input.deps.capture) {
+      const isNew = await input.deps.recordIfNew(updateId);
+      if (isNew) {
+        try {
+          await input.deps.capture(ctx, updateId, doc);
+        } catch (err) {
+          console.warn("[telegram] document capture failed after recordIfNew committed", err);
+        }
+      }
+    } else {
+      await tryTouch();
+    }
+    return { status: 200, body: "ok" };
+  }
+
+  // Photo (native photo message) — dedupe + capture, then 200.
+  // msg.photo is an array of PhotoSize objects sorted smallest→largest; use the last (largest).
+  if (Array.isArray(msg.photo) && msg.photo.length > 0) {
+    const largest = msg.photo[msg.photo.length - 1]!;
+    const doc: DocumentInfo = {
+      fileId: largest.file_id,
+      fileName: `telegram-photo-${updateId}.jpg`,
+      mimeType: "image/jpeg",
+      caption: typeof msg.caption === "string" ? msg.caption : undefined,
+      isImage: true,
+    };
+    if (input.deps.capture) {
+      const isNew = await input.deps.recordIfNew(updateId);
+      if (isNew) {
+        try {
+          await input.deps.capture(ctx, updateId, doc);
+        } catch (err) {
+          console.warn("[telegram] photo capture failed after recordIfNew committed", err);
+        }
+      }
+    } else {
+      await tryTouch();
+    }
+    return { status: 200, body: "ok" };
+  }
+
+  // Non-text update (sticker, …) — best-effort touch, no dedupe.
   if (typeof msg.text !== "string") {
     await tryTouch();
     return { status: 200, body: "ok" };
@@ -202,13 +276,22 @@ export function buildHandleTelegramWebhook(
             }
           : undefined,
         capture: options?.captureInbox
-          ? async (m, updateId) => {
+          ? async (m, updateId, document) => {
               // Schedule best-effort — never awaited in-band; a throw here would
               // already be caught by decideWebhookOutcome's try/catch.
               await ctx.scheduler.runAfter(
                 0,
                 internal.inbox.capture.captureAndAck,
-                { chatId: m.chatId, raw: m.text, updateId },
+                {
+                  chatId: m.chatId,
+                  raw: m.text,
+                  updateId,
+                  fileId: document?.fileId,
+                  fileName: document?.fileName,
+                  mimeType: document?.mimeType,
+                  caption: document?.caption,
+                  isImage: document?.isImage,
+                },
               );
             }
           : undefined,

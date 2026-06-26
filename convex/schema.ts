@@ -74,13 +74,18 @@ export default defineSchema({
   inbox: defineTable({
     category: v.string(),
     source: v.string(),
-    kind: v.union(v.literal("url"), v.literal("text"), v.literal("youtube")),
+    kind: v.union(v.literal("url"), v.literal("text"), v.literal("youtube"), v.literal("document"), v.literal("image")),
     status: v.union(v.literal("pending"), v.literal("drained")),
     createdAt: v.number(),
     chatId: v.string(),
     raw: v.optional(v.string()),        // original unstripped message text
     summarySent: v.optional(v.boolean()),
     op: v.optional(v.union(v.literal("save"), v.literal("ask"))),
+    // Document (file upload) fields
+    fileId: v.optional(v.string()),
+    fileName: v.optional(v.string()),
+    mimeType: v.optional(v.string()),
+    caption: v.optional(v.string()),
   }).index("by_status", ["status"]),
 
   // ── Message log ──────────────────────────────────────────────────────────

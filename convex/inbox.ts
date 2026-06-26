@@ -17,6 +17,8 @@ const kindValidator = v.union(
   v.literal("url"),
   v.literal("text"),
   v.literal("youtube"),
+  v.literal("document"),
+  v.literal("image"),
 );
 
 // ─── Public query: listPending ────────────────────────────────────────────────
@@ -43,6 +45,9 @@ export const listPending = query({
       source: r.source,
       kind: r.kind,
       chatId: r.chatId,
+      fileId: r.fileId,
+      fileName: r.fileName,
+      mimeType: r.mimeType,
     }));
   },
 });
@@ -80,6 +85,10 @@ export const enqueue = internalMutation({
     chatId: v.string(),
     raw: v.optional(v.string()),
     op: v.optional(v.union(v.literal("save"), v.literal("ask"))),
+    fileId: v.optional(v.string()),
+    fileName: v.optional(v.string()),
+    mimeType: v.optional(v.string()),
+    caption: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await ctx.db.insert("inbox", {
@@ -91,6 +100,10 @@ export const enqueue = internalMutation({
       chatId: args.chatId,
       raw: args.raw,
       op: args.op,
+      fileId: args.fileId,
+      fileName: args.fileName,
+      mimeType: args.mimeType,
+      caption: args.caption,
     });
   },
 });

@@ -16,7 +16,7 @@ import { sendTelegramHtml } from "../lib/telegramHtml";
 
 // ─── Pure parsing helpers (exported for tests) ────────────────────────────────
 
-export type InboxKind = "url" | "text" | "youtube";
+export type InboxKind = "url" | "text" | "youtube" | "document";
 export type InboxIntent = "save" | "ask" | "command" | "other";
 
 /** Detect kind from source string. YouTube wins over generic url. */
@@ -200,6 +200,11 @@ export const captureAndAck = internalAction({
     chatId: v.string(),
     raw: v.string(),
     updateId: v.optional(v.number()),
+    // Document (file upload) fields — all optional; presence signals a document message
+    fileId: v.optional(v.string()),
+    fileName: v.optional(v.string()),
+    mimeType: v.optional(v.string()),
+    caption: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<void> => {
     const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -208,8 +213,24 @@ export const captureAndAck = internalAction({
       return;
     }
 
-    const parsed = classifyIntent(args.raw);
+    const isDocument = typeof args.fileId === "string";
     const now = Date.now();
+
+    // For documents: parse category from caption (or default "inbox"), force save.
+    // For text: run full classifyIntent as before.
+    const parsed = isDocument
+      ? (() => {
+          const captionText = args.caption ?? "";
+          const base = captionText.length > 0 ? parseCapture(captionText) : null;
+          return {
+            category: base?.category ?? "inbox",
+            source: args.caption ?? args.fileName ?? args.fileId ?? "",
+            kind: "document" as const,
+            intent: "save" as const,
+            op: "save" as const,
+          };
+        })()
+      : classifyIntent(args.raw);
 
     // Resolve active thread
     let threadId: string | undefined;
@@ -222,12 +243,15 @@ export const captureAndAck = internalAction({
       console.warn("[inbox] resolveThread failed (non-fatal)", err);
     }
 
-    // Log inbound message
+    // Log inbound message — use caption||[file: name] as display text for documents
+    const logText = isDocument
+      ? (args.caption ?? `[file: ${args.fileName ?? args.fileId}]`)
+      : args.raw;
     try {
       await ctx.runMutation(internal.messages.logMessage, {
         chatId: args.chatId,
         direction: "in",
-        text: args.raw,
+        text: logText,
         intent: parsed.intent,
         op: parsed.op,
         threadId: threadId as any,
@@ -244,15 +268,20 @@ export const captureAndAck = internalAction({
       source: parsed.source,
       kind: parsed.kind,
       chatId: args.chatId,
-      raw: args.raw,
+      raw: isDocument ? logText : args.raw,
       op: parsed.op,
+      fileId: args.fileId,
+      fileName: args.fileName,
+      mimeType: args.mimeType,
+      caption: args.caption,
     });
 
-    // Choose ack text based on op
-    const ackText =
-      parsed.op === "save"
-        ? "Yep — saving this. I'll send a quick summary once it's filed."
-        : "🔎 Looking that up in your wiki — one moment…";
+    // Choose ack text based on op / message type
+    const ackText = isDocument
+      ? "📎 Got your file — saving and reading it now. I'll send a summary once it's filed."
+      : parsed.op === "save"
+        ? "Yep — reading and filing this. I'll send a summary once it's done."
+        : "🔎 On it — I'll reply here shortly. (Bigger jobs can take a while; I'll stream progress.)";
 
     // Ack reply — best-effort; never throws up
     try {
